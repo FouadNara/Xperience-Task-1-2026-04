@@ -229,227 +229,62 @@ The application is considered successful if it enables:
 
 ---
 
-### User-Facing Workflows (What Actors See & Do)
+### User-Facing Workflows
 
-**WF1: Host Creates Event**
-```
-1. Host logs in
-2. Host fills event form (title, description, date/time, location, capacity)
-3. Host submits → Event stored in DB
-4. Host sees success message + event ID/dashboard link
-5. Host is now the owner of the event
-```
-
-**WF2: Host Invites Guests**
-```
-1. Host navigates to "Invite Guests" section of event
-2. Host uploads email list or enters emails manually
-3. Host clicks "Send Invitations"
-4. System validates emails, generates unique tokens, sends emails
-5. Host sees list of invitees with "Sent" status
-6. Host can view/resend individual invitations
-```
-
-**WF3: Invitee Receives Invite & RSVPs**
-```
-1. Invitee receives email with subject & RSVP link
-2. Invitee clicks link → Lands on event detail page (no login required)
-3. Invitee sees event info (title, date, location, description)
-4. Invitee selects response: Yes / No / Maybe
-5. Invitee clicks "Submit"
-6. System saves RSVP, checks capacity, assigns Yes → Waitlist if full
-7. Invitee sees confirmation page + confirmation email sent
-```
-
-**WF4: Host Views Attendance Dashboard**
-```
-1. Host logs in and navigates to event
-2. Host sees live dashboard:
-   - Total invited count
-   - Counts by status: Yes, No, Maybe, Waitlisted
-   - Full attendee list (name/email + response status)
-   - Waitlist section (if applicable)
-3. Dashboard auto-refreshes or host can manually refresh
-```
-
-**WF5: Invitee Changes RSVP (Before Event Starts)**
-```
-1. Invitee clicks RSVP link again (or uses saved link)
-2. System validates: current time < event start time
-3. Invitee sees current response + option to change
-4. Invitee selects new response and submits
-5. System updates RSVP, checks capacity logic
-6. Invitee sees confirmation of change
-7. Host dashboard updates in real-time
-8. Email confirmation sent to invitee
-```
-
-**WF6: Host Cancels or Closes Event**
-```
-1. Host navigates to event settings
-2. Host selects "Cancel Event" or "Close to New Responses"
-3. Host confirms action
-4. System marks event as cancelled/closed
-5. All current invitees are notified via email
-6. Future RSVP attempts fail gracefully
-```
+| Workflow | Actor | Trigger | Key Checks | Output |
+|----------|-------|---------|-----------|--------|
+| Create Event | Host | Submit event form | Authenticated, date > now, inputs validated | Event created in DB, host is owner |
+| Invite Guests | Host | Upload/enter emails | Valid format, duplicates rejected, host authorized | Invitations created, tokens generated, emails queued |
+| Submit RSVP | Invitee | Click token link + select response | Token valid, time < event.date_time, capacity available | RSVP saved; if full → Waitlisted |
+| Change RSVP | Invitee | Submit new response | Token valid, time < event.date_time, recalc capacity | RSVP updated, waitlist auto-promoted if applicable |
+| View Dashboard | Host | Navigate to event | Host authorized (user_id == event.host_id) | Live response counts + attendee list |
+| Cancel/Close Event | Host | Confirm action | Host authorized | Event marked cancelled/closed, invitees notified |
 
 ---
 
-### Internal System Workflows (Behind-the-Scenes Logic)
+### System Logic (Capacity, Auth, Time Locking)
 
-**WF7: Capacity & Waitlist Logic (During RSVP Submit)**
-```
-1. Invitee submits Yes response
-2. System START transaction
-3. Count confirmed "Yes" responses
-4. If count < capacity:
-   - Set RSVP.status = "Yes"
-   - Increment capacity used
-5. Else if count >= capacity:
-   - Set RSVP.status = "Waitlisted"
-   - Record position in waitlist
-6. COMMIT transaction
-7. Return response to invitee
-```
+**WF7: Capacity & Waitlist Check (Inside RSVP Submit Transaction)**
+- Count confirmed Yes responses
+- If count < capacity: set status = Yes
+- Else: set status = Waitlisted (record creation order)
+- **🔴 Unresolved**: Concurrency control (pessimistic lock vs. optimistic vs. serializable isolation)
 
-**WF8: Waitlist Auto-Promotion (When Attendee Changes to No)**
-```
-1. Invitee changes RSVP from Yes → No
-2. System START transaction
-3. Set RSVP.status = "No"
-4. Decrement capacity used
-5. Query first waitlisted person (order by created_at, oldest first)
-6. If waitlisted person exists:
-   - Set their RSVP.status = "Yes"
-   - Record promotion timestamp
-   - Queue email notification (see WF10)
-7. COMMIT transaction
-```
+**WF8: Waitlist Auto-Promotion (Yes → No)**
+- Decrement capacity, query oldest waitlisted (by created_at ASC)
+- If exists: promote to Yes, queue promotion email
+- **🔴 Unresolved**: Sync vs. async promotion timing
 
-**WF9: Authentication & Authorization (On Each Request)**
-```
-1. Request arrives to protected endpoint
-2. System checks session/JWT token
-3. Extract user_id from token
-4. For event-specific requests:
-   - Query event.host_id
-   - Verify request.user_id == event.host_id (for dashboard)
-   - OR verify invitee email in invitation table (for RSVP endpoints)
-5. Allow or deny based on permissions
-```
+**WF9: Authorization Check (Every Protected Request)**
+- Validate session/JWT, extract user_id
+- Host endpoints: verify user_id == event.host_id
+- RSVP endpoints: verify invitation.token exists
 
-**WF10: RSVP Lock After Event Start (On Any RSVP Attempt)**
-```
-1. Invitee clicks RSVP link / submits change
-2. System checks event.date_time
-3. If current_time >= event.date_time:
-   - Return error: "Event has started; RSVPs are locked"
-   - Do not allow response change
-4. Else:
-   - Process RSVP normally
-```
+**WF10: RSVP Time Lock (Every RSVP Attempt)**
+- Check: current_time >= event.date_time
+- If true: reject with "event locked" error
+- **🔴 Unresolved**: Single source of truth (flag vs. code-based check)
 
 ---
 
-### Background / Asynchronous Workflows (Non-Blocking)
+### Asynchronous Workflows
 
-**WF11: Send Invitation Email (Queued)**
-```
-1. Host invites batch of emails
-2. System queues email job for each invitee
-3. Background worker picks up job
-4. Worker renders email template (event details, unique RSVP link)
-5. Worker sends via email service
-6. Worker updates invitation.email_sent_at timestamp
-7. Worker records delivery status (success/failure)
-```
+**Email Sending** (WF11–WF13): Invitations, confirmations, and waitlist promotions are queued asynchronously. Background worker renders templates, sends via email provider, updates `invitation.email_sent_at` on success. **🔴 Unresolved**: Idempotency strategy (prevent duplicate sends on job retry).
 
-**WF12: Send Confirmation Email (After RSVP)**
-```
-1. Invitee submits RSVP
-2. System queues confirmation email
-3. Background worker sends email with:
-   - Confirmed response (Yes/No/Maybe)
-   - Event details
-   - Link to change response (if event hasn't started)
-4. No blocking on user experience
-```
-
-**WF13: Send Waitlist Promotion Notification**
-```
-1. Waitlist auto-promotion triggered (WF8)
-2. System queues notification email
-3. Background worker sends email:
-   - Congratulations, spot opened up
-   - You are now confirmed
-   - Event details + updated attendee count
-4. Invitee's response automatically updated
-```
-
-**WF14: Nightly RSVP Lock Check (Scheduled Job)**
-```
-1. System runs scheduled job at event start time (or slightly after)
-2. Query all events where date_time <= now AND not yet locked
-3. For each event:
-   - Set event.rsvps_locked = true
-   - Log lock timestamp
-4. Future RSVP attempts on locked events fail per WF10
-```
+**RSVP Lock Scheduling** (WF14): Scheduled job runs at/after `event.date_time` to set `event.rsvps_locked = true`. Fallback: RSVP Service also validates time on every submit. **🔴 Unresolved**: Which is authoritative—the flag or the time check?
 
 ---
 
-### Failure Workflows (Error Cases)
+### Failure Cases (Error Handling)
 
-**WF15: Invalid or Expired RSVP Link**
-```
-1. Invitee clicks RSVP link
-2. System queries invitation table by token
-3. If token not found or expired:
-   - Return error page: "Invalid or expired link"
-   - Offer option: "Request new link" (sends email to host)
-4. If event is cancelled:
-   - Return error: "This event has been cancelled"
-```
-
-**WF16: Email Send Failure (Invitation)**
-```
-1. Host invites guest
-2. Email service fails (invalid address, service down, etc.)
-3. System catches error, marks invitation.email_failed = true
-4. System logs error with timestamp
-5. Host sees warning in invitee list: "Email failed; retry available"
-6. Host can manually retry
-```
-
-**WF17: Duplicate Invitation**
-```
-1. Host invites the same email twice (intentional or not)
-2. System checks: invitation already exists for (event_id, email)
-3. System either:
-   - Rejects with error: "Already invited"
-   - OR updates existing record, resends email
-4. No duplicate records created
-```
-
-**WF18: Capacity Change Conflict**
-```
-1. Host attempts to reduce capacity below current "Yes" count
-2. System checks: new_capacity < confirmed_count
-3. System either:
-   - Rejects change: "Cannot reduce capacity below current confirmed RSVPs"
-   - OR requires host to manually demote attendees first
-4. Design decision needed (see Open Questions)
-```
-
-**WF19: Race Condition: Simultaneous Capacity Check**
-```
-1. Two invitees simultaneously submit Yes response
-2. System must ensure capacity isn't overbooked
-3. Solution: Database-level lock or transaction isolation (pessimistic locking)
-4. Database enforces: confirmed_count <= capacity
-5. Second request fails gracefully or goes to waitlist
-```
+| Error Case | Behavior | Control |
+|-----------|----------|---------|
+| Invalid/expired token (WF15) | Return error page + offer "request new link" | Validate token exists in Invitation table before serving form |
+| Event is cancelled | Reject RSVP with "event cancelled" | Check event.status before accepting any RSVP |
+| Email send failure (WF16) | Mark `invitation.email_failed = true`, log error, show host warning | Implement retry job + alerting for failures |
+| Duplicate invitation (WF17) | Reject or upsert existing record (design TBD) | Enforce unique constraint `(event_id, invitee_email)` in DB |
+| Capacity reduced after RSVPs (WF18) | Reject or require manual demotion (design TBD) | Validate `new_capacity >= confirmed_count` before allowing edit |
+| **Race: Simultaneous Yes at capacity (WF19)** | **🔴 Risk of overbooking** | **Must choose concurrency strategy (see Section 9.4)** |
 
 ---
 
@@ -719,136 +554,81 @@ Separate concerns by responsibility: event hosting, RSVP collection, capacity ma
 
 **1. Authentication & Authorization Layer**
 - **Responsibility**: User login/logout, session/JWT token management, permission checks
-- **Owns**: 
-  - User table (password hashes, email, credentials)
-  - Session/JWT handling
-  - Authorization rules (host-only endpoints, invitee link validation)
-- **Does NOT own**: Event data, RSVP data, email sending
+- **Owns**: User table (credentials), session/JWT handling, authorization rules
 - **Triggered by**: Login request, every protected endpoint request
 - **Output**: Authenticated user context (user_id) for downstream services
 
 ---
 
 **2. Event Service**
-- **Responsibility**: Event lifecycle—create, view, edit, cancel, close to responses
-- **Owns**:
-  - Event table (title, description, date/time, location, max_capacity, status)
-  - Event business rules (only host can modify)
-  - Event state transitions (OPEN → CLOSED_TO_RSVP → CANCELLED)
-- **Does NOT own**: RSVP logic, invitations, email sending
+- **Responsibility**: Event lifecycle (create, view, edit, cancel, close to responses)
+- **Owns**: Event table (title, date/time, location, max_capacity, status), business rules (host-only modify), state transitions
 - **Triggered by**: Host creates/cancels event
-- **Output**: Event record; publishes event cancellation event to downstream services
-- **Key Decision Not Yet Made**: Can host edit event after invitations sent? (affects invitation history)
+- **Output**: Event record; publishes event cancellation event
+- **🔴 Unresolved**: Can host edit event after invitations sent?
 
 ---
 
 **3. Invitation Service**
-- **Responsibility**: Generate unique RSVP links, create invitation records, manage resend
-- **Owns**:
-  - Invitation table (event_id, invitee_email, unique_token, invitation_status, created_at)
-  - Token generation (cryptographically secure, unique)
-  - Invitee batch uploads and validation
-- **Does NOT own**: Email sending, RSVP logic
-- **Triggered by**: Host uploads email list → Click "Invite"
+- **Responsibility**: Generate unique RSVP links, create/resend invitation records
+- **Owns**: Invitation table (event_id, invitee_email, unique_token, status), token generation (secure, unique), email batch validation
+- **Triggered by**: Host uploads email list and clicks "Invite"
 - **Output**: Invitation records; publishes "invitations_created" event
-- **Boundary**: Validates email format, checks for duplicates in batch, prevents duplicate invites to same event
+- **Boundary**: Validates email format, prevents duplicates, enforces unique (event_id, invitee_email)
 
 ---
 
-**4. RSVP Service** ⚠️ **CARRIES UNRESOLVED COMPLEXITY** ⚠️
-- **Responsibility**: Accept RSVP responses, enforce capacity/waitlist, manage status transitions, trigger promotions
-- **Owns**:
-  - RSVP table (event_id, invitee_email, response_status [Yes/No/Maybe/Waitlisted], created_at, updated_at, position_in_waitlist)
-  - Capacity enforcement logic
-  - Waitlist auto-promotion logic
-  - RSVP state machine (valid transitions)
-- **Does NOT own**: Time validation (delegates to Time Service), email sending
-- **Triggered by**: Invitee submits RSVP or changes response
+**4. RSVP Service** ⚠️ **Carries Blocking Decisions** ⚠️
+- **Responsibility**: Accept RSVP responses, enforce capacity/waitlist, manage transitions, trigger auto-promotions
+- **Owns**: RSVP table (event_id, invitee_email, status, created_at, updated_at, position_in_waitlist), capacity logic, waitlist promotion
+- **Triggered by**: Invitee submits/changes RSVP
 - **Output**: Updated RSVP record; publishes "rsvp_submitted" and "waitlist_promoted" events
-- **Critical Decisions NOT YET MADE**:
-  - **Concurrency Control**: How to prevent overbooking when two people submit Yes simultaneously?
-    - Option A: Pessimistic locking (SELECT FOR UPDATE on capacity counter)
-    - Option B: Optimistic locking (retry on conflict)
-    - Option C: Serializable isolation level
-    - Option D: Accept risk, fix via batch reconciliation job
-  - **Waitlist Promotion Timing**: Synchronous (block until email queued) or async (queue and return)?
-  - **State Transitions**: What transitions are allowed? (e.g., can Waitlisted → Yes only via promotion, never via user input)
-  - **Email Integration**: Queue email inside transaction, or separate concerns?
+- **🔴 Blocking Decisions** (see decision table above): Concurrency control, promotion timing, state transitions, email integration
 
 ---
 
 **5. Time / Scheduler Service**
-- **Responsibility**: Time-based business rules (lock RSVPs at event start)
-- **Owns**:
-  - Scheduled job that runs at/after event start time
-  - Sets event.rsvps_locked = true
-  - Validates current time >= event.date_time
-- **Does NOT own**: RSVP data, event details
-- **Triggered by**: Clock reaching event start time (cron/scheduled task)
-- **Output**: Sets rsvp_locked flag on event; publishes "event_locked" event
-- **Boundary**: Fallback if scheduler fails: RSVP Service also checks time on every submit
+- **Responsibility**: Lock RSVPs at event start time
+- **Owns**: Scheduled job that sets `event.rsvps_locked = true` at/after event.date_time
+- **Triggered by**: Clock reaching event start time (cron task)
+- **Output**: Sets rsvps_locked flag; publishes "event_locked" event
+- **Note**: Fallback: RSVP Service also validates time on every submit (defense-in-depth)
 
 ---
 
 **6. Dashboard Query Service**
 - **Responsibility**: Aggregate RSVP counts and attendee list for host dashboard
-- **Owns**:
-  - Attendance count queries (Yes, No, Maybe, Waitlisted by event)
-  - Attendee list queries (ordered, filtered)
-  - Dashboard data assembly
-- **Does NOT own**: RSVP state changes, event management
-- **Triggered by**: Host clicks "View Dashboard" or dashboard auto-refreshes
-- **Output**: Aggregated response counts + attendee list
+- **Owns**: Attendance count queries (Yes/No/Maybe/Waitlisted), attendee list queries (ordered, filtered)
+- **Triggered by**: Host views event dashboard
+- **Output**: Live response counts + attendee list
 - **Boundary**: Host-only access (verified by Auth layer)
 
 ---
 
 **7. Email/Notification Service** (Async, Queued)
-- **Responsibility**: Queue and send emails asynchronously (invitations, confirmations, promotions)
-- **Owns**:
-  - Email templates (invite, confirm, promoted)
-  - Integration with email provider (SendGrid, AWS SES, local SMTP)
-  - Email sending, retry logic, delivery status tracking
-  - Idempotency: do not send same email twice
-- **Does NOT own**: Business logic deciding when to send
+- **Responsibility**: Send emails asynchronously (invitations, confirmations, promotions)
+- **Owns**: Email templates, email provider integration, retry logic, delivery status tracking
 - **Triggered by**: "invitations_created", "rsvp_submitted", "waitlist_promoted" events
 - **Output**: Email sent, delivery status recorded in database
-- **Key Design**: Use message queue (async) or @Async jobs to avoid blocking user experience
-- **Risk**: No double-sending; needs idempotency key or email_sent_at flag
+- **🔴 Unresolved**: Idempotency strategy (prevent duplicate sends on retry)
 
 ---
 
 **8. Persistence Layer** (Spring Data JPA)
 - **Responsibility**: ORM mapping, query execution, enforce database constraints
-- **Owns**:
-  - Entity definitions (User, Event, Invitation, RSVP)
-  - Repository interfaces (queries, saves, updates)
-  - Database constraints (foreign keys, unique constraints, CHECK constraints)
-  - Transaction management
-- **Does NOT own**: Business logic
-- **Boundary**: Enforces data integrity constraints (capacity, uniqueness); Spring Data JPA + Hibernate handle entity lifecycle
+- **Owns**: Entity definitions (User, Event, Invitation, RSVP), repositories, transaction management, constraints
 
 ---
 
 **9. REST API Layer** (Spring MVC Controllers)
-- **Responsibility**: HTTP request/response handling, input validation, routing
-- **Owns**:
-  - Controller methods, request mapping
-  - Input validation (email format, field presence)
-  - HTTP status codes, error responses
-- **Does NOT own**: Business logic, database queries
-- **Flow**: Request → validate input → call service → return response
+- **Responsibility**: HTTP handling, input validation, routing
+- **Owns**: Controller methods, request mapping, validation, HTTP responses
 
 ---
 
 **10. Frontend Layer** (React, TypeScript, Vite)
 - **Responsibility**: UI rendering, user interactions, form handling
-- **Owns**:
-  - Component structure (event form, RSVP form, dashboard)
-  - User flows (navigation, form submission)
-  - Client-side validation
-- **Does NOT own**: Business logic, data persistence
-- **Flow**: User clicks → form submit → call API → display response
+- **Owns**: Component structure, user flows, client-side validation
 
 ---
 
@@ -917,33 +697,16 @@ Separate concerns by responsibility: event hosting, RSVP collection, capacity ma
 
 ---
 
-### 🚨 Unresolved Complexity in RSVP Service
+### 🚨 Blocking Decisions in RSVP Service
 
-The RSVP Service is carrying **four critical design decisions that must be resolved before implementation**:
+Before implementation starts, these four design choices must be made:
 
-1. **Concurrency Strategy**: How do we prevent two simultaneous Yes submissions when event is full?
-   - Pessimistic lock (SELECT FOR UPDATE) is safest but slower
-   - Serializable isolation is clean but may impact performance
-   - Optimistic retry is complex but easier on database
-   - **Decision needed**: Which approach matches our constraints?
-
-2. **Waitlist Promotion Path**: When a confirmed attendee says No, promote the first waitlisted person.
-   - Does RSVP Service handle this synchronously (blocking), or async?
-   - If async, what if promotion queue fails? How do we guarantee exactly-once?
-   - If synchronous, what's acceptable latency?
-   - **Decision needed**: Sync or async promotion?
-
-3. **Email Integration**: RSVP Service publishes "rsvp_submitted" event. Email Service subscribes and sends.
-   - What if Email Service misses the event? How do we retry?
-   - Should we use transactional outbox pattern (store email in DB, send async)?
-   - Or just hope the event is picked up?
-   - **Decision needed**: Guaranteed delivery or best-effort?
-
-4. **State Machine Validation**: What transitions are legal?
-   - Can someone go Waitlisted → Yes without being promoted?
-   - Can someone go Maybe → No → Yes multiple times?
-   - Should transitions be explicitly modeled in code or just happen?
-   - **Decision needed**: Explicit state machine or implicit rules?
+| Decision | Options | Tradeoffs | Unresolved |
+|----------|---------|-----------|-----------|
+| **Concurrency Control** | Pessimistic lock (SELECT FOR UPDATE) vs. Serializable isolation vs. Optimistic retry | Lock: safe, slower; Serializable: clean but may impact perf; Optimistic: complex but lighter load | Which matches constraints? |
+| **Waitlist Promotion** | Sync (block until email queued) vs. Async (queue and return) | Sync: simple, blocking; Async: faster but harder to guarantee exactly-once | How to guarantee no double-promotes? |
+| **Email Delivery** | Guaranteed (transactional outbox) vs. Best-effort (just queue and hope) | Guaranteed: complex, reliable; Best-effort: simple, risky | Retry strategy + failure alerting? |
+| **State Transitions** | Explicit state machine vs. Implicit rules (enforce in code) | Explicit: clear, hard to change; Implicit: flexible, easy to miss invalid transitions | Which transitions are legal? |
 
 ---
 

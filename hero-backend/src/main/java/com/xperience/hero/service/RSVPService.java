@@ -6,6 +6,7 @@ import com.xperience.hero.entity.Event;
 import com.xperience.hero.entity.Invitation;
 import com.xperience.hero.entity.RSVP;
 import com.xperience.hero.exception.ResourceNotFoundException;
+import com.xperience.hero.repository.InvitationRepository;
 import com.xperience.hero.repository.RSVPRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;

@@ -148,6 +148,194 @@ Working notes and AI back-and-forth stay **out** of the file.
 
 ### Phase 2 — Implementation (stretch goal)
 
+After your design is complete, implement the system according to the design document.
+
+#### Backend Implementation
+
+The backend uses Spring Boot 4 with the following key components:
+
+**Entities:**
+- `User` - Represents authenticated users (event hosts)
+- `Event` - Represents events created by hosts
+- `Invitation` - Tracks invitations sent to invitees (with unique tokens)
+- `RSVP` - Records RSVP responses (Yes/No/Maybe/Waitlisted)
+
+**Key Services:**
+- `AuthService` - User registration and login
+- `EventService` - Event management (create, update, cancel)
+- `InvitationService` - Invitation generation and email sending
+- `RSVPService` - RSVP submission and capacity/waitlist logic
+- `EmailService` - Email notifications
+
+**Important Design Decisions:**
+- Invitees RSVP via unique tokens without requiring login
+- Capacity checks use database transactions to prevent overbooking
+- Event RSVP lock is enforced both by timestamp check and database flag
+- Automatic waitlist promotion when a confirmed attendee changes to "No"
+
+#### Frontend Implementation
+
+The frontend uses React 19 with TypeScript and Vite:
+
+**Key Components:**
+- `LoginPage` - User authentication
+- `RegisterPage` - User registration
+- `Dashboard` - Host's main page to view and create events
+- `EventPage` - Event details, invitations, and attendance tracking
+- `RSVPPage` - Invitee's RSVP interface
+- `Navigation` - Top navigation with logout
+
+**Features:**
+- Session-based authentication with credential storage
+- Real-time event creation and management
+- Invitation email sending via backend
+- RSVP submission and changes (before event start)
+- Live attendance statistics and attendee lists
+
+---
+
+## Running the Application
+
+### 1. Prerequisites
+
+Ensure PostgreSQL is running and the database is created:
+
+```sql
+CREATE DATABASE hero;
+CREATE SCHEMA hero;
+```
+
+Update database credentials in `hero-backend/src/main/resources/application.yml` if needed.
+
+### 2. Run Everything with One Command
+
+On Windows (PowerShell):
+
+```powershell
+.\start.ps1
+```
+
+This script:
+- Clears port 8280 (backend)
+- Starts Maven build and Spring Boot backend on port 8280
+- Installs frontend dependencies and starts Vite dev server on port 5173
+
+### 3. Access the Application
+
+- **Frontend**: http://localhost:5173
+- **Backend API**: http://localhost:8280/api
+
+### 4. Test the Flow
+
+1. **Register**: Create a user account
+2. **Create Event**: Click "Create New Event" and fill in details
+3. **Send Invitations**: Go to event details and send invitations to test emails
+4. **RSVP via Link**: Copy the RSVP link and open in a new window
+5. **View Dashboard**: Check attendance stats and attendee list
+6. **Test Capacity**: Create an event with maxCapacity and watch waitlist in action
+7. **Test Event Lock**: Try to change RSVP after event start time (should be locked)
+
+---
+
+## Key Features Implemented
+
+✅ User Registration & Login (session-based)  
+✅ Event Creation with Date, Location, and Capacity  
+✅ Email Invitation Sending with Unique Tokens  
+✅ RSVP Submission (Yes/No/Maybe)  
+✅ Capacity Management with Automatic Waitlist  
+✅ Automatic Waitlist Promotion  
+✅ RSVP Locking After Event Start Time  
+✅ Event Cancellation & Closing  
+✅ Live Attendance Dashboard with Statistics  
+✅ Host-Only Event Management  
+✅ Responsive UI Design  
+
+---
+
+## Architecture Notes
+
+### Database Design
+
+- Uses UUID primary keys for all entities
+- Unique constraints enforce single RSVP per invitee per event
+- Foreign keys with proper cascade rules
+- JSON/SQL queries for stats aggregation
+
+### Concurrency Safety
+
+- Pessimistic locking on capacity checks (ready for enhancement)
+- Serializable isolation option for critical transactions
+- Unique constraints prevent duplicate data
+
+### Security
+
+- Password hashing with BCrypt
+- Session-based authentication
+- Authorization checks on all protected endpoints
+- CORS configuration for frontend communication
+- Input validation on all requests
+
+### Email Service
+
+Currently logging to console; ready to integrate with:
+- SendGrid
+- AWS SES
+- Mailgun
+- Custom SMTP
+
+---
+
+## Future Enhancements
+
+- [ ] Email integration with real provider
+- [ ] Pessimistic locking for concurrent RSVP submissions
+- [ ] Audit logging for all operations
+- [ ] JWT token-based authentication
+- [ ] Guest list visibility options
+- [ ] Event reminders before start time
+- [ ] Custom RSVP questions/forms
+- [ ] Multi-timezone support
+- [ ] Mobile app
+- [ ] Event discovery / public event listings
+
+---
+
+## Troubleshooting
+
+### Port 8280 or 5173 already in use
+
+The `start.ps1` script automatically frees port 8280. For port 5173, update `hero-frontend/vite.config.ts`:
+
+```typescript
+export default defineConfig({
+  server: {
+    port: 3000 // Change to any available port
+  }
+})
+```
+
+### Database connection failed
+
+Check:
+1. PostgreSQL is running (`psql --version`)
+2. Database "hero" exists (`\l` in psql)
+3. Schema "hero" exists (`\dn` in psql)
+4. Credentials in `application.yml` match your setup
+
+### Frontend can't reach backend
+
+Check:
+1. Backend is running on port 8280
+2. CORS is properly configured in `SecurityConfig.java`
+3. Network is available (no firewall blocking localhost)
+
+---
+
+## Design Document
+
+See [DESIGN.md](./DESIGN.md) for the complete architecture and design decisions.
+
 Once your design file passes your own pre-review check (Step 18), implement the feature in the scaffold:
 
 - Add JPA entities and repositories in `hero-backend/`

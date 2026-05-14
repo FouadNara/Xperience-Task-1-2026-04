@@ -22,15 +22,18 @@ public class RSVPService {
     private final InvitationService invitationService;
     private final EventService eventService;
     private final EmailService emailService;
+    private final InvitationRepository invitationRepository;
     
     public RSVPService(RSVPRepository rsvpRepository,
                       InvitationService invitationService,
                       EventService eventService,
-                      EmailService emailService) {
+                      EmailService emailService,
+                      InvitationRepository invitationRepository) {
         this.rsvpRepository = rsvpRepository;
         this.invitationService = invitationService;
         this.eventService = eventService;
         this.emailService = emailService;
+        this.invitationRepository = invitationRepository;
     }
     
     public RSVPResponse submitRSVP(String token, RSVPRequest request) {
@@ -182,8 +185,9 @@ public class RSVPService {
     
     private String getTokenForInvitee(String eventId, String inviteeEmail) {
         // This is a helper to get token from invitation
-        // In a real system, we'd optimize this
-        return invitationService.getInvitations(eventId, null).stream()
+        // Get all invitations for the event directly from repository
+        List<Invitation> invitations = invitationRepository.findByEventId(eventId);
+        return invitations.stream()
             .filter(inv -> inv.getInviteeEmail().equals(inviteeEmail))
             .findFirst()
             .map(Invitation::getToken)

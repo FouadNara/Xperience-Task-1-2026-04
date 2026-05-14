@@ -1,35 +1,84 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { useState, useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import './App.css';
+import api from './services/bulkSendApi';
+import { User } from './types';
+import LoginPage from './components/LoginPage';
+import RegisterPage from './components/RegisterPage';
+import Dashboard from './components/Dashboard';
+import EventPage from './components/EventPage';
+import RSVPPage from './components/RSVPPage';
+import Navigation from './components/Navigation';
 
 function App() {
-  const [count, setCount] = useState(0)
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    checkCurrentUser();
+  }, []);
+
+  const checkCurrentUser = async () => {
+    try {
+      const user = await api.getCurrentUser();
+      if (user) {
+        setCurrentUser(user as any);
+      }
+    } catch (error) {
+      console.error('Failed to check current user:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogin = (user: User) => {
+    setCurrentUser(user);
+  };
+
+  const handleLogout = async () => {
+    try {
+      await api.logout();
+      setCurrentUser(null);
+    } catch (error) {
+      console.error('Failed to logout:', error);
+    }
+  };
+
+  if (loading) {
+    return <div>Loading...</div>;
+  }
 
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+    <Router>
+      <div className="app">
+        {currentUser && <Navigation user={currentUser} onLogout={handleLogout} />}
+        <main className="main-content">
+          <Routes>
+            <Route
+              path="/login"
+              element={currentUser ? <Navigate to="/" /> : <LoginPage onLogin={handleLogin} />}
+            />
+            <Route
+              path="/register"
+              element={currentUser ? <Navigate to="/" /> : <RegisterPage onRegister={handleLogin} />}
+            />
+            <Route
+              path="/rsvp/:token"
+              element={<RSVPPage />}
+            />
+            <Route
+              path="/event/:id"
+              element={currentUser ? <EventPage /> : <Navigate to="/login" />}
+            />
+            <Route
+              path="/"
+              element={currentUser ? <Dashboard /> : <Navigate to="/login" />}
+            />
+          </Routes>
+        </main>
       </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+    </Router>
+  );
 }
 
-export default App
+export default App;

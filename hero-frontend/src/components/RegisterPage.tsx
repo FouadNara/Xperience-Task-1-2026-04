@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, FormEvent, ChangeEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../services/bulkSendApi';
 import { User } from '../types';
@@ -15,7 +15,7 @@ export default function RegisterPage({ onRegister }: RegisterPageProps) {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError('');
     setLoading(true);
@@ -43,7 +43,7 @@ export default function RegisterPage({ onRegister }: RegisterPageProps) {
               id="fullName"
               type="text"
               value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setFullName(e.target.value)}
               required
             />
           </div>
@@ -53,7 +53,7 @@ export default function RegisterPage({ onRegister }: RegisterPageProps) {
               id="email"
               type="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)}
               required
             />
           </div>
@@ -63,7 +63,7 @@ export default function RegisterPage({ onRegister }: RegisterPageProps) {
               id="password"
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)}
               required
             />
           </div>
